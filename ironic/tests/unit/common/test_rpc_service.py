@@ -10,11 +10,14 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import datetime
+import time
 from unittest import mock
 
 from oslo_config import cfg
 import oslo_messaging
 from oslo_service import service as base_service
+from oslo_utils import timeutils
 
 from ironic.common import context
 from ironic.common import rpc
@@ -108,3 +111,39 @@ class TestRPCService(base.TestCase):
         self.assertFalse(self.rpc_svc._started)
         self.assertIn("boom", self.rpc_svc._failure)
         self.assertRaises(SystemExit, self.rpc_svc.wait_for_start)
+
+    @mock.patch.object(timeutils, 'utcnow', autospec=True)
+    @mock.patch.object(time, 'sleep', autospec=True)
+    def test_stop_instant(self, mock_sleep, mock_utcnow):
+        # del_host returns instantly
+        mock_utcnow.side_effect = [
+            datetime.datetime(2023, 2, 2, 21, 10, 0),
+            datetime.datetime(2023, 2, 2, 21, 10, 0),
+        ]
+        self.rpc_svc.stop()
+        # wait the total CONF.hash_ring_reset_interval 15 seconds
+        mock_sleep.assert_has_calls([mock.call(15)])
+
+    @mock.patch.object(timeutils, 'utcnow', autospec=True)
+    @mock.patch.object(time, 'sleep', autospec=True)
+    def test_stop(self, mock_sleep, mock_utcnow):
+        # del_host returns after 5 seconds
+        mock_utcnow.side_effect = [
+            datetime.datetime(2023, 2, 2, 21, 10, 0),
+            datetime.datetime(2023, 2, 2, 21, 10, 5),
+        ]
+        self.rpc_svc.stop()
+        # wait the remaining 10 seconds
+        mock_sleep.assert_has_calls([mock.call(10)])
+
+    @mock.patch.object(timeutils, 'utcnow', autospec=True)
+    @mock.patch.object(time, 'sleep', autospec=True)
+    def test_stop_slow(self, mock_sleep, mock_utcnow):
+        # del_host returns after 16 seconds
+        mock_utcnow.side_effect = [
+            datetime.datetime(2023, 2, 2, 21, 10, 0),
+            datetime.datetime(2023, 2, 2, 21, 10, 16),
+        ]
+        self.rpc_svc.stop()
+        # no wait required, CONF.hash_ring_reset_interval already exceeded
+        mock_sleep.assert_not_called()
