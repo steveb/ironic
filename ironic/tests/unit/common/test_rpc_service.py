@@ -120,9 +120,13 @@ class TestRPCService(base.TestCase):
             datetime.datetime(2023, 2, 2, 21, 10, 0),
             datetime.datetime(2023, 2, 2, 21, 10, 0),
         ]
+        dbapi = mock.Mock()
+        dbapi.get_nodeinfo_list.return_value = []
+        self.rpc_svc.manager.dbapi = dbapi
         self.rpc_svc.stop()
         # wait the total CONF.hash_ring_reset_interval 15 seconds
         mock_sleep.assert_has_calls([mock.call(15)])
+        dbapi.get_nodeinfo_list.assert_called_once()
 
     @mock.patch.object(timeutils, 'utcnow', autospec=True)
     @mock.patch.object(time, 'sleep', autospec=True)
@@ -132,9 +136,13 @@ class TestRPCService(base.TestCase):
             datetime.datetime(2023, 2, 2, 21, 10, 0),
             datetime.datetime(2023, 2, 2, 21, 10, 5),
         ]
+        dbapi = mock.Mock()
+        dbapi.get_nodeinfo_list.return_value = []
+        self.rpc_svc.manager.dbapi = dbapi
         self.rpc_svc.stop()
         # wait the remaining 10 seconds
         mock_sleep.assert_has_calls([mock.call(10)])
+        dbapi.get_nodeinfo_list.assert_called_once()
 
     @mock.patch.object(timeutils, 'utcnow', autospec=True)
     @mock.patch.object(time, 'sleep', autospec=True)
@@ -144,6 +152,30 @@ class TestRPCService(base.TestCase):
             datetime.datetime(2023, 2, 2, 21, 10, 0),
             datetime.datetime(2023, 2, 2, 21, 10, 16),
         ]
+        dbapi = mock.Mock()
+        dbapi.get_nodeinfo_list.return_value = []
+        self.rpc_svc.manager.dbapi = dbapi
         self.rpc_svc.stop()
         # no wait required, CONF.hash_ring_reset_interval already exceeded
         mock_sleep.assert_not_called()
+        dbapi.get_nodeinfo_list.assert_called_once()
+
+    @mock.patch.object(timeutils, 'utcnow', autospec=True)
+    @mock.patch.object(time, 'sleep', autospec=True)
+    def test_stop_has_reserved(self, mock_sleep, mock_utcnow):
+        # del_host returns after 5 seconds
+        mock_utcnow.side_effect = [
+            datetime.datetime(2023, 2, 2, 21, 10, 0),
+            datetime.datetime(2023, 2, 2, 21, 10, 5),
+        ]
+        dbapi = mock.Mock()
+        # 3 calls to manager has_reserved until all reservation locks
+        # are released
+        dbapi.get_nodeinfo_list.side_effect = [['a', 'b'], ['a'], []]
+        self.rpc_svc.manager.dbapi = dbapi
+        self.rpc_svc.stop()
+        # wait the remaining 10 seconds, then wait until has_reserved
+        # returns False
+        mock_sleep.assert_has_calls(
+            [mock.call(10), mock.call(1), mock.call(1)])
+        self.assertEqual(3, dbapi.get_nodeinfo_list.call_count)
