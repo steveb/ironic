@@ -40,6 +40,7 @@ class Conductor(base.IronicObject, object_base.VersionedObjectDictCompat):
         'drivers': object_fields.ListOfStringsField(nullable=True),
         'hostname': object_fields.StringField(),
         'conductor_group': object_fields.StringField(),
+        'online': object_fields.BooleanField(),
     }
 
     @classmethod
