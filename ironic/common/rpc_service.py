@@ -136,7 +136,7 @@ class RPCService(service.Service):
         #   CONF.graceful_shutdown_timeout
         # - The process manager (systemd, kubernetes) sends SIGKILL after the
         #   configured graceful period
-        while self.manager.has_reserved():
+        while True:
             LOG.info('Waiting for reserved nodes to clear on host %(host)s',
                      {'host': self.host})
             time.sleep(1)
