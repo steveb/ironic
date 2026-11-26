@@ -2,7 +2,12 @@
 
 set -ex
 
-connections=$(ss --no-header state established '( dport = :5900 or sport = :5900 )' | wc -l)
+# Fail closed: if the client count cannot be determined, treat the console
+# as idle so an unattended browser is not left running.
+if ! connections=$(/usr/local/bin/connection-count); then
+    echo "WARNING: could not count VNC connections, assuming zero" >&2
+    connections=0
+fi
 
 if [ "$connections" -eq 0 ]; then
     # Signal the main process to gracefully shut down the browser.

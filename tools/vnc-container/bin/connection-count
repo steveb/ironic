@@ -1,0 +1,24 @@
+#!/bin/bash
+#
+# Print the number of established inbound VNC connections on VNC_PORT.
+#
+# VNC_PORT defaults to 5900. Container providers which run the VNC server
+# on a different port set it in the container environment.
+#
+# Only inbound sockets (sport) are counted. An outbound VNC connection,
+# for example from a future container which connects to a BMC VNC server,
+# must not be mistaken for a user.
+#
+# Output: one integer on stdout.
+# Exit: 0 on success; non-zero if VNC_PORT is invalid or ss fails.
+
+set -euo pipefail
+
+port="${VNC_PORT:-5900}"
+
+if ! [[ "$port" =~ ^[0-9]+$ ]]; then
+    echo "connection-count: invalid VNC_PORT '${port}'" >&2
+    exit 2
+fi
+
+ss --no-header state established "sport = :${port}" | wc -l

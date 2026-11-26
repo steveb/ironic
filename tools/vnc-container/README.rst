@@ -30,6 +30,32 @@ to use this image in ``ironic.conf``:
       container_provider=systemd
       console_image=localhost/ironic-vnc-container
 
+Connection count
+----------------
+
+The image installs ``/usr/local/bin/connection-count``, which prints the number
+of established inbound VNC connections. This absolute path is part of the
+container image contract: ``stop-firefox.sh`` and the ``systemd``,
+``container`` and ``kubernetes`` console container providers execute it.
+
+The script takes no arguments. It reads ``VNC_PORT`` from the container
+environment, defaulting to ``5900``, and runs::
+
+    ss --no-header state established "sport = :${VNC_PORT:-5900}"
+
+Only inbound sockets (``sport``) are counted. A future console container which
+makes an outbound VNC connection to a BMC must not have that connection counted
+as a user.
+
+On success the script prints a single integer to stdout and exits ``0``. It
+exits non-zero if ``VNC_PORT`` is not numeric or if ``ss`` fails or is missing,
+and prints the error to stderr. Consumers treat a non-zero exit as an unknown
+count: ``stop-firefox.sh`` assumes no clients and shuts the browser down, and
+ironic-conductor assumes no activity so the session expires as before.
+
+A custom image must provide this executable at the same absolute path. ``ss``
+from ``iproute2`` must be present.
+
 
 Implementation
 --------------
@@ -48,8 +74,9 @@ When a VNC connection is established, the following occurs:
    ``Oem`` value in a ``/redfish/v1`` response
 6. Runs vendor specific scripts to display an HTML5 based console
 
-Multiple VNC connections can share a single instance. When the last VNC
-connection is closed, the running Firefox is closed.
+Multiple VNC connections can share a single instance. ``stop-firefox.sh`` uses
+``/usr/local/bin/connection-count`` to detect when the last VNC connection is
+closed, and then closes the running Firefox.
 
 Vendor specific implementations are as follows.
 
