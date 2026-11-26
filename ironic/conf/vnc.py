@@ -90,6 +90,14 @@ opts = [
         help='Interval (in seconds) between periodic checks to determine '
              'whether active console sessions have expired and need to be '
              'closed.'),
+    cfg.IntOpt(
+        'console_client_count_timeout',
+        default=5,
+        min=1,
+        help='Maximum time in seconds to wait for the console container '
+             'provider to report the number of connected VNC clients. The '
+             'count is used to extend a graphical console session while a '
+             'client remains connected.'),
     cfg.StrOpt(
         'container_provider',
         default='fake',

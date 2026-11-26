@@ -25,6 +25,7 @@ from oslo_config import cfg
 from ironic.common import console_factory
 from ironic.common import exception
 from ironic.common import utils
+from ironic.console.container import base as container_base
 from ironic.console.container import container
 from ironic.console.container import fake
 from ironic.console.container import kubernetes
@@ -75,6 +76,51 @@ class TestFakeConsoleContainer(base.TestCase):
         task = mock.Mock(node=mock.Mock(uuid='1234'))
 
         self.assertFalse(provider.is_stopped(task))
+
+    def test_get_client_count(self):
+        provider = fake.FakeConsoleContainer()
+        task = mock.Mock(node=mock.Mock(uuid='1234'))
+
+        self.assertEqual(0, provider.get_client_count(task))
+
+        provider.client_count = 3
+        self.assertEqual(3, provider.get_client_count(task))
+
+
+class TestClientCount(base.TestCase):
+
+    def setUp(self):
+        super(TestClientCount, self).setUp()
+        self.provider = fake.FakeConsoleContainer()
+        self.task = mock.Mock(node=mock.Mock(uuid='1234'))
+
+    def test_get_client_count_default(self):
+        # The base implementation must let out-of-tree providers keep
+        # loading without implementing activity detection.
+        self.assertIsNone(
+            container_base.BaseConsoleContainer.get_client_count(
+                self.provider, self.task))
+
+    def test_parse_client_count(self):
+        self.assertEqual(3, self.provider._parse_client_count('3\n'))
+
+    def test_parse_client_count_zero(self):
+        self.assertEqual(0, self.provider._parse_client_count('0\n'))
+
+    def test_parse_client_count_clamped(self):
+        self.assertEqual(
+            container_base.MAX_CLIENT_COUNT,
+            self.provider._parse_client_count(
+                f'{container_base.MAX_CLIENT_COUNT + 1}\n'))
+
+    def test_parse_client_count_empty(self):
+        self.assertIsNone(self.provider._parse_client_count(''))
+
+    def test_parse_client_count_not_a_number(self):
+        self.assertIsNone(self.provider._parse_client_count('ouch\n'))
+
+    def test_parse_client_count_negative(self):
+        self.assertIsNone(self.provider._parse_client_count('-1\n'))
 
 
 class TestSystemdConsoleContainer(base.TestCase):
@@ -524,6 +570,26 @@ WantedBy=default.target""", f.read())
         for state in ('activating', 'deactivating', 'reloading'):
             mock_exec.return_value = (f'{state}\n', None)
             self.assertFalse(self.provider.is_stopped(task))
+
+    @mock.patch.object(utils, 'execute', autospec=True)
+    def test_get_client_count(self, mock_exec):
+        task = mock.Mock(node=mock.Mock(uuid='1234'))
+        mock_exec.return_value = ('2\n', None)
+
+        self.assertEqual(2, self.provider.get_client_count(task))
+
+        mock_exec.assert_called_once_with(
+            'podman', 'exec', 'systemd-ironic-console-1234',
+            '/usr/local/bin/connection-count',
+            timeout=CONF.vnc.console_client_count_timeout)
+
+    @mock.patch.object(utils, 'execute', autospec=True)
+    def test_get_client_count_failure(self, mock_exec):
+        task = mock.Mock(node=mock.Mock(uuid='1234'))
+        mock_exec.side_effect = processutils.ProcessExecutionError(
+            stderr='ouch')
+
+        self.assertIsNone(self.provider.get_client_count(task))
 
 
 class TestKubernetesConsoleContainer(base.TestCase):
@@ -1434,6 +1500,82 @@ metadata:
             task,
         )
 
+    @mock.patch.object(utils, "execute", autospec=True)
+    @mock.patch.object(
+        kubernetes.KubernetesConsoleContainer,
+        "_get_resources_from_yaml",
+        autospec=True,
+    )
+    @mock.patch.object(
+        kubernetes.KubernetesConsoleContainer,
+        "_render_template",
+        autospec=True,
+    )
+    def test_get_client_count(self, mock_render, mock_get_resources,
+                              mock_exec):
+        task = mock.Mock(node=mock.Mock(uuid="1234"))
+        mock_render.return_value = "fake-manifest"
+        mock_get_resources.return_value = [
+            {
+                "kind": "Pod",
+                "metadata": {
+                    "name": "ironic-console-1234",
+                    "namespace": "test-namespace",
+                },
+            }
+        ]
+        mock_exec.return_value = ("2\n", "")
+
+        self.assertEqual(2, self.provider.get_client_count(task))
+
+        mock_render.assert_called_once_with(self.provider, "1234")
+        mock_get_resources.assert_called_once_with(
+            self.provider, "fake-manifest", kind="Pod")
+        mock_exec.assert_called_once_with(
+            "kubectl", "exec", "ironic-console-1234", "-n",
+            "test-namespace", "--", "/usr/local/bin/connection-count",
+            timeout=CONF.vnc.console_client_count_timeout)
+
+    @mock.patch.object(utils, "execute", autospec=True)
+    @mock.patch.object(
+        kubernetes.KubernetesConsoleContainer,
+        "_get_resources_from_yaml",
+        autospec=True,
+    )
+    @mock.patch.object(
+        kubernetes.KubernetesConsoleContainer,
+        "_render_template",
+        autospec=True,
+    )
+    def test_get_client_count_failure(self, mock_render, mock_get_resources,
+                                      mock_exec):
+        task = mock.Mock(node=mock.Mock(uuid="1234"))
+        mock_render.return_value = "fake-manifest"
+        mock_get_resources.return_value = [
+            {
+                "kind": "Pod",
+                "metadata": {
+                    "name": "ironic-console-1234",
+                    "namespace": "test-namespace",
+                },
+            }
+        ]
+        mock_exec.side_effect = processutils.ProcessExecutionError(
+            stderr="ouch")
+
+        self.assertIsNone(self.provider.get_client_count(task))
+
+    @mock.patch.object(
+        kubernetes.KubernetesConsoleContainer,
+        "_render_template",
+        autospec=True,
+        side_effect=Exception("ouch"),
+    )
+    def test_get_client_count_render_failure(self, mock_render):
+        task = mock.Mock(node=mock.Mock(uuid="1234"))
+
+        self.assertIsNone(self.provider.get_client_count(task))
+
 
 class TestContainerConsoleContainer(base.TestCase):
 
@@ -1802,3 +1944,37 @@ class TestContainerConsoleContainer(base.TestCase):
         self.assertRaisesRegex(
             exception.ConsoleContainerError, 'ouch',
             self.provider.is_stopped, task)
+
+    @mock.patch.object(utils, 'execute', autospec=True)
+    def test_get_client_count(self, mock_exec):
+        task = mock.Mock(node=mock.Mock(uuid='1234'))
+        mock_exec.return_value = ('1\n', None)
+
+        self.assertEqual(1, self.provider.get_client_count(task))
+
+        mock_exec.assert_called_once_with(
+            'docker', 'exec', 'ironic-console-1234',
+            '/usr/local/bin/connection-count',
+            timeout=CONF.vnc.console_client_count_timeout)
+
+    @mock.patch.object(utils, 'execute', autospec=True)
+    def test_get_client_count_executable(self, mock_exec):
+        CONF.set_override('container_executable', 'podman', 'vnc')
+        task = mock.Mock(node=mock.Mock(uuid='1234'))
+        mock_exec.return_value = ('1\n', None)
+
+        self.assertEqual(1, self.provider.get_client_count(task))
+
+        mock_exec.assert_called_once_with(
+            'podman', 'exec', 'ironic-console-1234',
+            '/usr/local/bin/connection-count',
+            timeout=CONF.vnc.console_client_count_timeout)
+
+    @mock.patch.object(utils, 'execute', autospec=True)
+    def test_get_client_count_failure(self, mock_exec):
+        task = mock.Mock(node=mock.Mock(uuid='1234'))
+        mock_exec.side_effect = processutils.ProcessExecutionError(
+            stderr='ouch'
+        )
+
+        self.assertIsNone(self.provider.get_client_count(task))

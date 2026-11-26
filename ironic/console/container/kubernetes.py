@@ -354,3 +354,32 @@ class KubernetesConsoleContainer(base.BaseConsoleContainer):
         # stopped, and must not end the console session.
         phase = self._get_pod_status(pod_name, namespace)
         return not phase or phase in ("Succeeded", "Failed")
+
+    def get_client_count(self, task):
+        """Return the number of VNC clients, or None if unknown.
+
+        Runs the connection-count script installed in the console image.
+
+        :param task: A TaskManager instance.
+        :returns: The number of connected VNC clients, or None
+        """
+        uuid = task.node.uuid
+        try:
+            rendered = self._render_template(uuid)
+            pod = list(
+                self._get_resources_from_yaml(rendered, kind="Pod"))[0]
+            pod_name = pod["metadata"]["name"]
+            namespace = pod["metadata"]["namespace"]
+            out, _ = utils.execute(
+                "kubectl", "exec", pod_name, "-n", namespace, "--",
+                "/usr/local/bin/connection-count",
+                timeout=CONF.vnc.console_client_count_timeout)
+        except Exception as e:
+            # NOTE: template rendering, yaml parsing and kubectl exec can
+            # all fail. The count is advisory, so log and treat the
+            # session as inactive rather than failing the periodic.
+            LOG.warning(
+                "Could not get the console client count for node %s, "
+                "assuming no active clients: %s", uuid, e)
+            return None
+        return self._parse_client_count(out)

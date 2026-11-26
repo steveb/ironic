@@ -315,3 +315,23 @@ class ContainerConsoleContainer(base.BaseConsoleContainer):
             raise exception.ConsoleContainerError(
                 provider=self.provider_name, reason=e)
         return not bool(out.strip())
+
+    def get_client_count(self, task):
+        """Return the number of VNC clients, or None if unknown.
+
+        Runs the connection-count script installed in the console image.
+
+        :param task: A TaskManager instance.
+        :returns: The number of connected VNC clients, or None
+        """
+        uuid = task.node.uuid
+        container = self._container_name(uuid)
+        try:
+            out, _ = self._execute(
+                'exec', container, '/usr/local/bin/connection-count',
+                timeout=CONF.vnc.console_client_count_timeout)
+        except (processutils.ProcessExecutionError, OSError) as e:
+            LOG.warning('Could not get the console client count for node '
+                        '%s, assuming no active clients: %s', uuid, e)
+            return None
+        return self._parse_client_count(out)

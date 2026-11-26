@@ -27,6 +27,11 @@ from ironic.console.rfb import auth
 
 LOG = logging.getLogger(__name__)
 
+# The number of connected clients reported by a provider is clamped to
+# this value, so a broken or malicious probe cannot pin a console session
+# with an implausible count.
+MAX_CLIENT_COUNT = 1024
+
 
 class BaseConsoleContainer(object, metaclass=abc.ABCMeta):
     """Base class for console container provider APIs."""
@@ -113,3 +118,37 @@ class BaseConsoleContainer(object, metaclass=abc.ABCMeta):
             exited, or deleted), False if it is running or still starting.
         :raises: ConsoleContainerError if the state cannot be determined.
         """
+
+    def get_client_count(self, task):
+        """Return the number of VNC clients, or None if unknown.
+
+        This is used by the graphical console periodic task to decide
+        whether a session with no activity should be extended. The default
+        implementation returns None, so providers which do not implement
+        activity detection keep the previous expiry behaviour.
+
+        :param task: A TaskManager instance.
+        :returns: The number of connected VNC clients, or None when the
+            count cannot be determined.
+        """
+        return None
+
+    def _parse_client_count(self, output):
+        """Parse the output of the console image's connection-count script.
+
+        The script prints a single integer. Anything else is a failure,
+        returned as None so the caller treats the session as inactive.
+
+        :param output: stdout from the client count command
+        :returns: The clamped client count, or None if it cannot be parsed
+        """
+        try:
+            count = int(output.strip())
+        except (AttributeError, TypeError, ValueError):
+            LOG.warning('Could not parse console client count from %r',
+                        output)
+            return None
+        if count < 0:
+            LOG.warning('Ignoring negative console client count %s', count)
+            return None
+        return min(count, MAX_CLIENT_COUNT)

@@ -22,6 +22,10 @@ class FakeConsoleContainer(base.BaseConsoleContainer):
 
     provider_name = 'fake'
 
+    # Number of clients reported by get_client_count. Tests may override
+    # this to exercise the conductor's activity handling.
+    client_count = 0
+
     def start_container(self, task, app_name, app_info):
         # return a test-net-1 address
         return '192.0.2.1', 5900
@@ -34,3 +38,6 @@ class FakeConsoleContainer(base.BaseConsoleContainer):
 
     def is_stopped(self, task):
         return False
+
+    def get_client_count(self, task):
+        return self.client_count
