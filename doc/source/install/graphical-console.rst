@@ -130,6 +130,12 @@ following role rules::
     - apiGroups:
       - ""
       resources:
+      - pods/exec
+      verbs:
+      - create
+    - apiGroups:
+      - ""
+      resources:
       - secrets
       verbs:
       - create
@@ -293,6 +299,63 @@ periodic task which reconciles console sessions leaves the session alone
 unless the container is definitively stopped, so a container which is
 slow to start, or a transient failure of the check, never stops a healthy
 console.
+
+The ``get_client_count`` method is optional and reports the number of VNC
+clients connected to the node's console, or ``None`` when the count cannot be
+determined. The default implementation returns ``None``, which leaves the
+previous session expiry behaviour in place. Providers which implement it let
+ironic-conductor extend a session while a client remains connected. The
+in-tree providers run ``/usr/local/bin/connection-count`` in the console
+container; see the console image documentation for that contract.
+
+Console session lifetime
+------------------------
+
+A graphical console session is bounded by two timeouts:
+
+``[vnc]token_timeout``
+  The idle timeout, in seconds. It is measured from when the console was
+  enabled, or from the last observation of a connected VNC client.
+
+``[vnc]max_session_timeout``
+  The maximum lifetime of a session, in seconds, measured from when the
+  console was enabled. It defaults to 86400 (24 hours). A value of ``0``
+  disables the hard limit and allows activity to extend a session
+  indefinitely; this is not recommended. The value should be at least
+  ``token_timeout``.
+
+While at least one VNC client is connected, ironic-conductor extends the
+session by recording ``console_last_active`` in the node's
+``driver_internal_info``. Activity is checked near the idle deadline, not on
+every periodic run. If no activity is detected and the idle deadline has
+passed, the console is stopped. The hard session limit is enforced regardless
+of activity.
+
+Activity is detected by running ``/usr/local/bin/connection-count`` in the
+console container. The script requires ``ss`` from ``iproute2``, which the
+in-tree image provides. If the script is missing, ``ss`` fails, or the output
+cannot be parsed, the probe is treated as no activity and the session expires
+at the idle deadline. ``[vnc]console_client_count_timeout`` (default 5
+seconds) bounds the probe.
+
+A custom console image must provide ``/usr/local/bin/connection-count`` and
+``ss``. See the console container ``README.rst`` for the script contract.
+
+The console URL returned by the API remains usable for reconnects while the
+session is active, up to the hard limit. An established websocket is not
+re-validated; preventing reconnects after a deadline is enforced by
+``ironic-novncproxy`` validating the token, and the conductor stops the
+container at the deadline. After the idle timeout or the hard limit, disable
+and re-enable the console to obtain a new token.
+
+Because a console URL is valid while the session is active, up to the hard
+limit, serve consoles over HTTPS and avoid logging console URLs. Deployments
+which require a tighter bound should set a shorter ``max_session_timeout``.
+
+After upgrading ironic-conductor, the console image must also be updated
+before activity tracking takes effect. Existing sessions which are still
+active can be extended when the upgraded conductor first checks them; sessions
+which have already expired must be disabled and re-enabled.
 
 Networking requirements
 -----------------------

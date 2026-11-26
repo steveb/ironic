@@ -18,10 +18,63 @@ import datetime
 import secrets
 from urllib import parse
 
+from oslo_log import log as logging
 from oslo_utils import timeutils
 
 from ironic.common import exception
 from ironic.conf import CONF
+
+LOG = logging.getLogger(__name__)
+
+CONSOLE_LAST_ACTIVE = 'console_last_active'
+
+
+def _parse_timestamp(value):
+    # Values are written by Node.timestamp_driver_internal_info() using
+    # timeutils.utcnow().isoformat(). parse_isotime() also accepts values
+    # without fractional seconds, and normalize_time() returns the naive
+    # UTC value used by timeutils.utcnow().
+    return timeutils.normalize_time(timeutils.parse_isotime(value))
+
+
+def _token_created(node):
+    """Return the time the console token was created.
+
+    :param node: the node object
+    :returns: a datetime object
+    :raises: NotAuthorized if the timestamp is missing or malformed
+    """
+    token_created = node.driver_internal_info.get(
+        'novnc_secret_token_created')
+    if not token_created:
+        # missing token created timestamp for node
+        raise exception.NotAuthorized()
+    try:
+        return _parse_timestamp(token_created)
+    except (TypeError, ValueError):
+        LOG.warning('Malformed novnc_secret_token_created for node %s: %r',
+                    node.uuid, token_created)
+        raise exception.NotAuthorized()
+
+
+def _console_last_active(node):
+    """Return the last console activity timestamp, or None.
+
+    A malformed timestamp is ignored: it must not shorten a session which
+    is otherwise valid.
+
+    :param node: the node object
+    :returns: a datetime object, or None
+    """
+    last_active = node.driver_internal_info.get(CONSOLE_LAST_ACTIVE)
+    if not last_active:
+        return None
+    try:
+        return _parse_timestamp(last_active)
+    except (TypeError, ValueError):
+        LOG.warning('Ignoring malformed %s for node %s: %r',
+                    CONSOLE_LAST_ACTIVE, node.uuid, last_active)
+        return None
 
 
 def novnc_authorize(node):
@@ -38,6 +91,7 @@ def novnc_authorize(node):
     """
     token = secrets.token_urlsafe()
     node.set_driver_internal_info('novnc_secret_token', token)
+    node.del_driver_internal_info(CONSOLE_LAST_ACTIVE)
     node.timestamp_driver_internal_info('novnc_secret_token_created')
     node.save()
     return token
@@ -50,7 +104,19 @@ def novnc_unauthorize(node):
     """
     node.del_driver_internal_info('novnc_secret_token')
     node.del_driver_internal_info('novnc_secret_token_created')
+    node.del_driver_internal_info(CONSOLE_LAST_ACTIVE)
     node.save()
+
+
+def set_console_last_active(node):
+    """Record that at least one client is connected to the console.
+
+    The caller is responsible for saving the node, typically while holding
+    an exclusive lock.
+
+    :param node: the node object
+    """
+    node.timestamp_driver_internal_info(CONSOLE_LAST_ACTIVE)
 
 
 def novnc_validate(node, token):
@@ -79,24 +145,48 @@ def novnc_validate(node, token):
         raise exception.NotAuthorized()
 
 
+def token_idle_deadline(node):
+    """Calculate when an active console session becomes idle.
+
+    The deadline slides with console activity, but is not bounded by the
+    hard session limit here; use token_valid_until() for that.
+
+    :param node: the node object
+    :returns: a datetime object representing the idle deadline
+    :raises: NotAuthorized if no valid creation timestamp is stored
+    """
+    created_dt = _token_created(node)
+    last_active = _console_last_active(node)
+    active = max(created_dt, last_active) if last_active else created_dt
+    return active + datetime.timedelta(seconds=CONF.vnc.token_timeout)
+
+
+def token_hard_deadline(node):
+    """Calculate the absolute deadline of a console session.
+
+    :param node: the node object
+    :returns: a datetime object, or None when the hard limit is disabled
+    :raises: NotAuthorized if no valid creation timestamp is stored
+    """
+    if CONF.vnc.max_session_timeout <= 0:
+        return None
+    created_dt = _token_created(node)
+    return created_dt + datetime.timedelta(
+        seconds=CONF.vnc.max_session_timeout)
+
+
 def token_valid_until(node):
     """Calculate when the token will expire
 
     :param node: the node object
     :returns: a datetime object representing expiration time
-    :raises: NotAuthorized if no timestamp is stored in the node
+    :raises: NotAuthorized if no valid creation timestamp is stored
     """
-    token_created = node.driver_internal_info.get('novnc_secret_token_created')
-    if not token_created:
-        # missing token created timestamp for node
-        raise exception.NotAuthorized()
-    timeout = CONF.vnc.token_timeout
-    created_dt = datetime.datetime.strptime(token_created,
-                                            '%Y-%m-%dT%H:%M:%S.%f')
-
-    time_delta = datetime.timedelta(seconds=timeout)
-
-    return created_dt + time_delta
+    deadline = token_idle_deadline(node)
+    hard_deadline = token_hard_deadline(node)
+    if hard_deadline is not None:
+        deadline = min(deadline, hard_deadline)
+    return deadline
 
 
 def get_console(node):

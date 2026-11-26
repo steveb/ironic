@@ -1,0 +1,39 @@
+---
+features:
+  - |
+    Graphical console sessions are now extended while a VNC client remains
+    connected to the console container. ironic-conductor runs
+    ``/usr/local/bin/connection-count`` in the container to detect active
+    clients and records the last activity in the node's
+    ``driver_internal_info``. ``[vnc]token_timeout`` is now an idle timeout,
+    bounded by the new ``[vnc]max_session_timeout`` hard limit (default
+    86400 seconds; set it to 0 to disable the limit).
+  - |
+    The console container provider API has a new optional
+    ``get_client_count()`` method. The ``systemd``, ``container`` and
+    ``kubernetes`` providers implement it using the ``connection-count``
+    script in the console image. Out-of-tree providers which do not
+    implement it keep the previous session expiry behaviour.
+upgrade:
+  - |
+    The console image must be rebuilt or replaced to include
+    ``/usr/local/bin/connection-count`` before activity tracking takes
+    effect. A custom or third-party console image must provide the script
+    and ``ss`` from ``iproute2``. Deployments which do not update the image
+    retain the previous session expiry behaviour.
+  - |
+    The ``kubernetes`` console container provider now needs the
+    ``pods/exec`` permission (``create``) for the conductor's service
+    account, scoped to the console namespace and pods.
+  - |
+    Console sessions which predate the upgrade have no recorded activity.
+    They retain the previous expiry behaviour unless they are still active
+    when the upgraded conductor first checks them. Disable and re-enable a
+    console to reliably opt in.
+security:
+  - |
+    A graphical console URL now remains valid while the session is active,
+    up to ``[vnc]max_session_timeout``, rather than expiring
+    ``[vnc]token_timeout`` seconds after it was issued. Serve console URLs
+    over HTTPS, avoid logging them, and set a shorter
+    ``[vnc]max_session_timeout`` if a tighter bound is required.

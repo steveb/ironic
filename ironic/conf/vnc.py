@@ -82,7 +82,19 @@ opts = [
         'token_timeout',
         default=600,
         min=10,
-        help='The lifetime of a console auth token (in seconds).'),
+        help='The lifetime of a console auth token (in seconds). For a '
+             'graphical console this is the idle timeout, measured from when '
+             'the console was enabled or from the last observation of a '
+             'connected VNC client.'),
+    cfg.IntOpt(
+        'max_session_timeout',
+        default=86400,
+        min=0,
+        help='Maximum lifetime of a graphical console session in seconds, '
+             'measured from when the console was enabled. A value of 0 '
+             'disables the hard limit and allows console activity to extend '
+             'a session indefinitely, which is not recommended. The value '
+             'should be at least the value of token_timeout.'),
     cfg.IntOpt(
         'expire_console_session_interval',
         default=120,
